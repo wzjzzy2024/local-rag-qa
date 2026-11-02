@@ -93,13 +93,24 @@ def main():
     parser.add_argument("--reset", action="store_true")
     args = parser.parse_args()
 
+    # 首次运行时 index/ 可能不存在；缓存写入发生在向量化阶段，须提前建目录
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+
     if args.reset:
         for p in (CACHE_VEC, CACHE_CNT):
             p.unlink(missing_ok=True)
         print("[reset] 已清空缓存")
 
+    if not KB_SOURCE.exists():
+        print(f"[错误] 知识库源目录不存在: {KB_SOURCE}")
+        print("       请先准备 kb_source/（放入 .md 文档）后再运行。")
+        sys.exit(1)
+
     print("1) 加载文档...")
     docs = load_documents(args.sample)
+    if not docs:
+        print(f"[错误] 未在 {KB_SOURCE} 下找到任何非空 .md 文档，无法构建索引。")
+        sys.exit(1)
     print(f"   共加载 {len(docs)} 个 md 文档")
 
     splitter = RecursiveCharacterTextSplitter(
@@ -138,6 +149,10 @@ def main():
         print(f"\n[中断] 已保存 {i} 块缓存，重跑可从断点继续")
         sys.exit(1)
     print(f"\n   向量化完成，共 {len(all_vecs)} 个向量，耗时 {time.time()-t0:.0f}s")
+
+    if not all_vecs:
+        print("[错误] 没有生成任何向量，构建中止。")
+        sys.exit(1)
 
     print("5) 构建 FAISS 索引...")
     mat = np.array(all_vecs, dtype="float32")

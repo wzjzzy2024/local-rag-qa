@@ -61,6 +61,8 @@ MIX_HIGH = float(os.environ.get("MIX_HIGH", "0.75"))
 MIX_MODE = os.environ.get("MIX_MODE", "tool_calling")
 # 灰区 tool calling 判定超时（秒），超时抛异常回退 kb_sufficient
 GREY_TC_TIMEOUT = float(os.environ.get("GREY_TC_TIMEOUT", "15"))
+# 生成/改写/二级判定调用超时（秒）
+GEN_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "120"))
 
 # 灰区 tool calling 判定用中性格式约束：只约束输出形态，不含任何语义诱导。
 TC_CONSTRAINT = (
@@ -93,7 +95,30 @@ SYSTEM_PROMPT = (
 )
 
 
+def _ollama_hint(exc):
+    """把 Ollama 连接/超时异常转成可操作的提示信息。"""
+    return (
+        f"Ollama 调用失败（{type(exc).__name__}: {exc}）。\n"
+        f"请确认 Ollama 已启动、所需模型已拉取：\n"
+        f"  ollama serve\n"
+        f"  ollama pull {EMBED_MODEL}\n"
+        f"  ollama pull {LLM_MODEL}\n"
+        f"当前地址: {OLLAMA_BASE}"
+    )
+
+
 def load_index():
+    required = {
+        "kb_index.faiss": INDEX_DIR / "kb_index.faiss",
+        "kb_metas.npy": INDEX_DIR / "kb_metas.npy",
+        "kb_texts.npy": INDEX_DIR / "kb_texts.npy",
+    }
+    missing = [name for name, path in required.items() if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"索引文件缺失: {', '.join(missing)}（目录: {INDEX_DIR}）。"
+            "请先准备 kb_source/ 并运行 python build_index.py 构建索引。")
+
     data = np.frombuffer((INDEX_DIR / "kb_index.faiss").read_bytes(), dtype="uint8")
     index = faiss.deserialize_index(data)
     with open(INDEX_DIR / "kb_metas.npy", "rb") as f:
@@ -422,7 +447,10 @@ def ask(question, _cache=None):
         emb = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE)
         index, texts, metas = load_index()
 
-    qv = np.array(emb.embed_query(question), dtype="float32").reshape(1, -1)
+    try:
+        qv = np.array(emb.embed_query(question), dtype="float32").reshape(1, -1)
+    except Exception as e:
+        raise RuntimeError(_ollama_hint(e)) from e
     faiss.normalize_L2(qv)
     scores, idx = index.search(qv, TOP_K)
     scores = scores[0]          # 余弦相似度
@@ -430,7 +458,8 @@ def ask(question, _cache=None):
 
     best = float(scores[0]) if len(scores) and scores[0] > -9e9 else 0.0
 
-    llm = ChatOllama(model=LLM_MODEL, base_url=OLLAMA_BASE, temperature=0.2)
+    llm = ChatOllama(model=LLM_MODEL, base_url=OLLAMA_BASE, temperature=0.2,
+                     request_timeout=GEN_TIMEOUT)
 
     sel = [(int(i), float(s)) for i, s in zip(idx, scores)
            if int(i) >= 0 and s > 0]
@@ -478,7 +507,10 @@ def ask(question, _cache=None):
             print(f"  {k}. [{s:.2f}] {texts[i][:100]}...")
     print("-" * 50)
 
-    resp = llm.invoke(prompt)
+    try:
+        resp = llm.invoke(prompt)
+    except Exception as e:
+        raise RuntimeError(_ollama_hint(e)) from e
     print(resp.content)
     print(source_note)
     return mode, route_detail, best
@@ -498,7 +530,10 @@ def main():
             continue
         if q.lower() in ("exit", "quit", "退出"):
             break
-        ask(q)
+        try:
+            ask(q)
+        except (RuntimeError, FileNotFoundError) as e:
+            print(f"\n[错误] {e}")
 
 
 if __name__ == "__main__":

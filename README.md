@@ -6,23 +6,25 @@
 
 | 组件 | 说明 |
 |---|---|
-| 推理框架 | Ollama（本地服务，端口 11434） |
+| 推理框架 | Ollama（本地服务，默认 `http://localhost:11434`） |
 | 生成模型 | `qwen2.5:7b-instruct-q4_K_M`（7.6B，中文问答） |
 | 向量模型 | `bge-m3`（多语言 embedding，1024 维） |
-| Python | `D:\Dev\Python313\python.exe`（3.13） |
-| 关键依赖 | langchain-ollama / langchain-community / langchain-text-splitters / faiss-cpu / numpy / beautifulsoup4 |
+| Python | 3.10+（开发/验收使用 3.13） |
+| 关键依赖 | 见 `requirements.txt`：langchain-ollama / langchain-core / langchain-text-splitters / faiss-cpu / numpy / requests |
 
-> 注意：系统 PATH 里的 `python` 指向 Doubao 沙箱自带解释器，**必须使用 `D:\Dev\Python313\python.exe` 运行本项目的脚本**。
+> 可用环境变量 `OLLAMA_BASE_URL` 覆盖默认 Ollama 地址。
 
 ## 目录结构
 
 ```
-RAG课设/
-├── kb_source/        # 知识库源文档（3968 个 md，来自 GitHub: LINJIANG12/video2book-courses）
-├── index/            # 构建好的 FAISS 索引
-│   ├── kb_index.faiss   # 向量索引（606MB，155159 条）
+RAG/
+├── kb_source/        # 知识库源文档（.md；不入库，需自备）
+├── index/            # 构建好的 FAISS 索引（不入库，由 build_index.py 生成）
+│   ├── kb_index.faiss   # 向量索引
 │   ├── kb_metas.npy     # 每条向量的来源元数据
 │   └── kb_texts.npy     # 每条向量的原文
+├── .env.example      # 环境变量模板（复制为 .env，填入 key）
+├── requirements.txt  # 第三方依赖（按实际 import 生成）
 ├── build_index.py    # 建库脚本（断点续传 + 自动重试）
 ├── web_providers.py  # L1: 搜索后端抽象（WebSearchProvider 接口 + Bing/Tavily 双 provider + 降级链）
 ├── rag_chat.py       # 问答脚本（L2 正文清洗/截断/上下文模板 + L3 二级判定路由）
@@ -39,24 +41,66 @@ RAG课设/
 └── e2e_test.py       # 端到端问答冒烟
 ```
 
+## 快速开始（首次运行）
+
+前置条件与完整顺序：
+
+1. 安装 [Ollama](https://ollama.com/download)，并确保服务已启动：
+   ```bash
+   ollama serve
+   ```
+2. 拉取所需模型：
+   ```bash
+   ollama pull qwen2.5:7b-instruct-q4_K_M
+   ollama pull bge-m3
+   ```
+3. 安装 Python 依赖（建议使用虚拟环境）：
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate        # Windows: .venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+4. 准备知识库源文档：把 `.md` 文件放入 `kb_source/`。本项目演示语料来自
+   [LINJIANG12/video2book-courses](https://github.com/LINJIANG12/video2book-courses)：
+   ```bash
+   git clone https://github.com/LINJIANG12/video2book-courses.git kb_source
+   ```
+   （也可替换为自己的 md 文档；`kb_source/` 不入库。）
+5. 构建索引（首次全量约 2 小时，支持断点续传）：
+   ```bash
+   python build_index.py
+   ```
+   快速试跑可用 `python build_index.py --sample 50`。
+6. 配置联网搜索 key（可选）：不配置时 Tavily 不可用，会自动降级 Bing。
+   ```bash
+   cp .env.example .env
+   # 编辑 .env，填入 TAVILY_API_KEY=tvly-...
+   ```
+7. 启动问答：
+   ```bash
+   python rag_chat.py
+   ```
+   输入问题回车问答，`exit` 退出。
+
+> `index/` 与 `kb_source/` 都已加入 `.gitignore`，克隆仓库后必须自行准备源文档并构建索引。
+
 ## 使用方法
 
 ### 1. 启动问答（索引已构建好）
 
-```powershell
-cd E:\各科作业\大三\人工智能\RAG课设
-D:\Dev\Python313\python.exe rag_chat.py
+```bash
+python rag_chat.py
 ```
 
 交互式输入问题，`exit` 退出。
 
 ### 2. 切换搜索 provider（L1）
 
-```powershell
+```bash
 # 默认 tavily；切换为 bing：
-$env:WEB_PROVIDER = "bing"
+export WEB_PROVIDER=bing        # Windows PowerShell: $env:WEB_PROVIDER = "bing"
 # Tavily key 读取：环境变量优先，回退项目根目录 .env（已 gitignore）
-D:\Dev\Python313\python.exe rag_chat.py
+python rag_chat.py
 ```
 
 > provider 抽象见 `web_providers.py`：`WebSearchProvider.search(query, top_k) -> list[dict]`，
@@ -65,14 +109,14 @@ D:\Dev\Python313\python.exe rag_chat.py
 
 ### 3. 联网上下文预算（L2）
 
-```powershell
+```bash
 # 默认 13000 token（≈40% of 32k 窗口），可按需调：
-$env:WEB_CONTEXT_BUDGET_TOKENS = "16000"
+export WEB_CONTEXT_BUDGET_TOKENS=16000   # Windows PowerShell: $env:WEB_CONTEXT_BUDGET_TOKENS = "16000"
 ```
 
 ### 4. L3 混合路由（三段置信度分工，替换阶段一）
 
-```powershell
+```bash
 # 三段路由:
 #   best <  MIX_LOW            -> 直接联网（D 段纯阈值直连，无 LLM 判定）
 #   best >  MIX_HIGH           -> 直接知识库（A 段纯阈值直连，无 LLM 判定）
@@ -80,20 +124,22 @@ $env:WEB_CONTEXT_BUDGET_TOKENS = "16000"
 # 灰区判定: MIX_MODE=tool_calling（默认）用 qwen 原生 tool calling（中性格式约束），
 #   异常/超时/第三种输出 -> 回退 kb_sufficient -> 再失败保守走知识库；
 #   MIX_MODE=kb_sufficient 即切回阶段一判定方式。
-$env:MIX_LOW   = "0.55"          # 灰区下界（默认 0.55）
-$env:MIX_HIGH  = "0.75"          # 灰区上界（默认 0.75）
-$env:MIX_MODE  = "tool_calling"  # 灰区判定方式（tool_calling / kb_sufficient）
-$env:GREY_TC_TIMEOUT = "15"      # 灰区 tool calling 判定超时秒数（默认 15）
+export MIX_LOW=0.55                 # 灰区下界（默认 0.55）
+export MIX_HIGH=0.75                # 灰区上界（默认 0.75）
+export MIX_MODE=tool_calling        # 灰区判定方式（tool_calling / kb_sufficient）
+export GREY_TC_TIMEOUT=15           # 灰区 tool calling 判定超时秒数（默认 15）
+export LLM_TIMEOUT=120              # 生成/改写/二级判定调用超时秒数（默认 120）
+# Windows PowerShell 写法：$env:MIX_LOW = "0.55"（其余同理）
 # 旧配置 SECONDARY_ROUTE_ENABLED / SECONDARY_ROUTE_CHECK_MAX 已不再参与路由，
 # 常量保留仅为兼容历史验收脚本（l3_acceptance/l3_compare*.py）。
 ```
 
 ### 5. 重新构建索引（知识库更新后）
 
-```powershell
-D:\Dev\Python313\python.exe build_index.py        # 全量构建（约2小时）
-D:\Dev\Python313\python.exe build_index.py --sample 50   # 仅前50个文件（调试）
-D:\Dev\Python313\python.exe build_index.py --reset       # 清空缓存重来
+```bash
+python build_index.py                 # 全量构建（约2小时）
+python build_index.py --sample 50     # 仅前50个文件（调试）
+python build_index.py --reset         # 清空缓存重来
 ```
 
 ### 6. 运行验收
@@ -127,13 +173,15 @@ bge-m3 向量化
    ▼
 FAISS 检索 top-5（余弦相似度）
    │
-   ├── 最高相关度 < 0.55 ──► 联网兜底（provider 抽象）
+   ├── best < 0.55 ──► 直接联网兜底（D 段纯阈值直连）
    │
-   ├── 最高相关度 ≥ 0.68 ──► 知识库命中（高置信）：拼入上下文 ──► 生成答案
+   ├── best > 0.75 ──► 直接知识库命中（A 段纯阈值直连）：拼入上下文 ──► 生成答案
    │
-   └── 灰区 [0.55, 0.68) ──► L3 二级判定：LLM 判断 top-5 片段能否回答
-                              ├── 足以回答 ──► 知识库生成（标注来源）
-                              └── 不足以回答 ──► 回退联网兜底
+   └── 灰区 [0.55, 0.75] ──► qwen 原生 tool calling 判定
+                              ├── 决定调用 search ──► 联网兜底
+                              └── 输出 NO_TOOL ──► 知识库生成（标注来源）
+                              （判定异常/超时/格式不符 → 回退 kb_sufficient
+                                二级判定 → 仍失败则保守走知识库）
                                                     │
                              ┌──────────────────────┴──────────────────┐
                              ▼ (主 provider，默认 tavily)                ▼ (自动降级 bing)
@@ -325,7 +373,8 @@ FAISS 检索 top-5（余弦相似度）
 ## 部署过程（对应课设报告素材）
 
 1. 安装 Ollama，`ollama pull qwen2.5:7b-instruct-q4_K_M`、`ollama pull bge-m3`
-2. `git clone https://github.com/LINJIANG12/video2book-courses.git` 拉取知识库源文档
-3. 安装 Python 依赖（见上表）
-4. `build_index.py` 构建 FAISS 索引
-5. `rag_chat.py` 问答验证
+2. `pip install -r requirements.txt` 安装 Python 依赖
+3. `git clone https://github.com/LINJIANG12/video2book-courses.git kb_source` 准备知识库源文档
+4. `python build_index.py` 构建 FAISS 索引
+5. `cp .env.example .env` 并填入 `TAVILY_API_KEY`（可选，不填自动降级 Bing）
+6. `python rag_chat.py` 问答验证

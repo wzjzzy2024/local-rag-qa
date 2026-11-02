@@ -318,6 +318,7 @@ def search_with_fallback(query, top_k=5, relevance_check=None, preferred=None,
     search_word: 已改写好的搜索词（LLM 改写），优先于规则精简
     返回 (results, used_provider_name)
     """
+    provider = None
     try:
         provider = get_provider(preferred)
         print(f"[provider] 使用主 provider: {provider.name}")
@@ -327,6 +328,7 @@ def search_with_fallback(query, top_k=5, relevance_check=None, preferred=None,
             return results, provider.name
         print(f"[provider] {provider.name} 无结果，降级到 bing")
     except Exception as e:
+        # provider 可能尚未创建成功（get_provider 本身抛异常），不能用 provider.name
         print(f"[provider] {getattr(provider, 'name', '?')} 失败: {e}，降级到 bing")
 
     try:
