@@ -1,0 +1,24 @@
+# ---- secrets ----
+.env
+
+# ---- python ----
+__pycache__/
+*.pyc
+*.pyo
+
+# ---- generated data ----
+index/
+kb_source/
+_report_work/
+screenshots/
+_blind20_result.json
+_e2e28_result.json
+*.npy
+*.faiss
+
+# ---- os / editor / venv ----
+.DS_Store
+.venv/
+venv/
+.idea/
+.vscode/

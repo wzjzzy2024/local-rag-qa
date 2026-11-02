@@ -1,0 +1,11 @@
+# 由项目 *.py 的实际 import 语句生成（标准库已省略）
+# import faiss                    -> faiss-cpu
+# from langchain_ollama           -> langchain-ollama
+# from langchain_core             -> langchain-core
+# from langchain_text_splitters   -> langchain-text-splitters
+faiss-cpu
+numpy
+requests
+langchain-ollama
+langchain-core
+langchain-text-splitters
